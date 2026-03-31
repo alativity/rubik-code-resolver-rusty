@@ -1,8 +1,6 @@
 use wgpu::util::DeviceExt;
 use cgmath::*;
 use crate::cube::{RubiksCube, Face, Move};
-use std::time::Instant;
-
 pub struct HudInfo {
     pub fps: u32,
     pub solver_status: String,
@@ -205,7 +203,12 @@ pub struct Renderer {
     depth_texture: wgpu::Texture,
     depth_texture_view: wgpu::TextureView,
     camera: Camera,
-    start_time: Instant,
+    /// Horizontal orbit angle in radians.
+    orbit_yaw: f32,
+    /// Vertical orbit angle in radians (clamped to ±85°).
+    orbit_pitch: f32,
+    /// Distance from origin to camera eye.
+    orbit_radius: f32,
 }
 
 struct Camera {
@@ -274,8 +277,14 @@ impl Renderer {
         };
         surface.configure(&device, &config);
 
+        // Default orbit: roughly (5,5,5) view — yaw=45°, pitch=35°, r≈8.66
+        let orbit_yaw:    f32 = std::f32::consts::PI * 0.25;
+        let orbit_pitch:  f32 = 0.611; // ~35°
+        let orbit_radius: f32 = 8.66;
+
+        let eye = Self::orbit_to_eye(orbit_yaw, orbit_pitch, orbit_radius);
         let camera = Camera {
-            eye: Point3::new(5.0, 5.0, 5.0),
+            eye,
             target: Point3::new(0.0, 0.0, 0.0),
             up: Vector3::unit_y(),
             aspect: config.width as f32 / config.height as f32,
@@ -438,9 +447,35 @@ impl Renderer {
             depth_texture,
             depth_texture_view,
             camera,
-            start_time: Instant::now(),
+            orbit_yaw,
+            orbit_pitch,
+            orbit_radius,
         }
     }
+
+    /// Convert spherical orbit angles to a Cartesian eye position.
+    fn orbit_to_eye(yaw: f32, pitch: f32, radius: f32) -> Point3<f32> {
+        let cos_pitch = pitch.cos();
+        Point3::new(
+            radius * cos_pitch * yaw.sin(),
+            radius * pitch.sin(),
+            radius * cos_pitch * yaw.cos(),
+        )
+    }
+
+    /// Update the orbit angles from an external controller (e.g. mouse drag).
+    /// `pitch` is automatically clamped to ±85° to avoid gimbal flip.
+    pub fn set_orbit(&mut self, yaw: f32, pitch: f32) {
+        let max_pitch = std::f32::consts::PI * 0.471; // 85°
+        self.orbit_yaw   = yaw;
+        self.orbit_pitch = pitch.clamp(-max_pitch, max_pitch);
+        self.camera.eye  = Self::orbit_to_eye(self.orbit_yaw, self.orbit_pitch, self.orbit_radius);
+    }
+
+    /// Current orbit angles (yaw, pitch).
+    #[allow(dead_code)]
+    pub fn orbit(&self) -> (f32, f32) { (self.orbit_yaw, self.orbit_pitch) }
+    
 
     pub fn size(&self) -> winit::dpi::PhysicalSize<u32> { self.size }
 
@@ -471,16 +506,10 @@ impl Renderer {
     }
 
     fn update(&mut self) {
-        let time = self.start_time.elapsed().as_secs_f32();
-        let angle = time * 30.0; // 30 degrees per second
-        let rotation_axis = Vector3::new(1.0, 1.0, 1.0).normalize();
-        let model = Matrix4::from_axis_angle(rotation_axis, Deg(angle));
-
         let uniforms = Uniforms {
             view_proj: self.camera.build_view_projection_matrix().into(),
-            model: model.into(),
+            model: Matrix4::identity().into(),
         };
-
         self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
     }
 
@@ -528,12 +557,12 @@ impl Renderer {
                         Matrix4::identity()
                     };
 
-                    let up_color = if y == 2 { Self::face_to_color(cube.get_face(Face::Up)[x][z]) } else { [0.0, 0.0, 0.0] };
-                    let down_color = if y == 0 { Self::face_to_color(cube.get_face(Face::Down)[x][2 - z]) } else { [0.0, 0.0, 0.0] };
-                    let front_color = if z == 2 { Self::face_to_color(cube.get_face(Face::Front)[x][2 - y]) } else { [0.0, 0.0, 0.0] };
-                    let back_color = if z == 0 { Self::face_to_color(cube.get_face(Face::Back)[x][y]) } else { [0.0, 0.0, 0.0] };
-                    let right_color = if x == 2 { Self::face_to_color(cube.get_face(Face::Right)[2 - z][2 - y]) } else { [0.0, 0.0, 0.0] };
-                    let left_color = if x == 0 { Self::face_to_color(cube.get_face(Face::Left)[z][2 - y]) } else { [0.0, 0.0, 0.0] };
+                    let up_color = if y == 2 { Self::face_to_color(cube.get_face(Face::Up)[z][x]) } else { [0.0, 0.0, 0.0] };
+                    let down_color = if y == 0 { Self::face_to_color(cube.get_face(Face::Down)[2 - z][x]) } else { [0.0, 0.0, 0.0] };
+                    let front_color = if z == 2 { Self::face_to_color(cube.get_face(Face::Front)[2 - y][x]) } else { [0.0, 0.0, 0.0] };
+                    let back_color = if z == 0 { Self::face_to_color(cube.get_face(Face::Back)[2 - y][2 - x]) } else { [0.0, 0.0, 0.0] };
+                    let right_color = if x == 2 { Self::face_to_color(cube.get_face(Face::Right)[2 - y][2 - z]) } else { [0.0, 0.0, 0.0] };
+                    let left_color = if x == 0 { Self::face_to_color(cube.get_face(Face::Left)[2 - y][z]) } else { [0.0, 0.0, 0.0] };
 
                     let colors = [front_color, back_color, left_color, right_color, up_color, down_color];
 

@@ -11,8 +11,10 @@ use winit::{
     application::ApplicationHandler,
     event::{WindowEvent, MouseButton, ElementState},
     event_loop::{ActiveEventLoop, EventLoop},
-    window::{Window, WindowId},
+    window::{Window, WindowId, CursorIcon},
 };
+
+const ORBIT_SENSITIVITY: f32 = 0.007; // radians per pixel
 
 // ─────────────────────────────────────────────
 // Button identifiers (must match BUTTON_LABELS order)
@@ -56,6 +58,11 @@ struct App {
     fps_frame_count:  u32,
     current_fps:      u32,
     mouse_pos:        (f32, f32),
+    /// Orbit camera drag state
+    is_dragging:      bool,
+    drag_last:        (f32, f32),
+    orbit_yaw:        f32,
+    orbit_pitch:      f32,
 }
 
 impl App {
@@ -88,15 +95,22 @@ impl App {
             fps_frame_count:   0,
             current_fps:       0,
             mouse_pos:         (0.0, 0.0),
+            is_dragging:       false,
+            drag_last:         (0.0, 0.0),
+            // Match renderer defaults so camera starts at the same angle
+            orbit_yaw:         std::f32::consts::PI * 0.25,
+            orbit_pitch:       0.611,
         }
     }
 
     // ── Poll-check: should we request continuous redraws? ─────────────────────
+    #[allow(dead_code)]
     fn is_active(&self) -> bool {
         self.phase == SolvePhase::Solving
             || self.is_animating
             || self.pause_timer > 0.0
             || (!self.pending_moves.is_empty() && self.phase == SolvePhase::Animating)
+            || self.is_dragging
     }
 
     // ── Per-frame update ───────────────────────────────────────────────────────
@@ -220,6 +234,7 @@ impl App {
     }
 
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
+        self.renderer.set_orbit(self.orbit_yaw, self.orbit_pitch);
         let hud = self.build_hud();
         self.renderer.render(&self.cube, self.current_move, self.animation_progress, &hud)
     }
@@ -426,14 +441,51 @@ impl ApplicationHandler for AppState {
                 app.renderer.resize(physical_size);
             }
             WindowEvent::CursorMoved { position, .. } => {
-                app.mouse_pos = (position.x as f32, position.y as f32);
-                // Redraw to update hover highlights
-                app.window.request_redraw();
+                let (mx, my) = (position.x as f32, position.y as f32);
+                app.mouse_pos = (mx, my);
+
+                if app.is_dragging {
+                    let (lx, ly) = app.drag_last;
+                    let dx = mx - lx;
+                    let dy = my - ly;
+                    app.orbit_yaw   -= dx * ORBIT_SENSITIVITY;
+                    app.orbit_pitch -= dy * ORBIT_SENSITIVITY;
+                    // Clamp pitch to ±85° (done again in set_orbit, belt-and-suspenders)
+                    let max_pitch = std::f32::consts::PI * 0.471;
+                    app.orbit_pitch = app.orbit_pitch.clamp(-max_pitch, max_pitch);
+                    app.drag_last = (mx, my);
+                    app.window.request_redraw();
+                } else {
+                    // Update hover highlights
+                    app.window.request_redraw();
+                }
             }
             WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left, .. } => {
                 let (mx, my) = app.mouse_pos;
-                app.handle_button_click(mx, my);
+                // Check if the press lands on a button — if so, it's a click, not a drag.
+                let over_button = {
+                    let win_h = app.renderer.size().height as f32;
+                    let rects = button_rects(win_h);
+                    rects.iter().any(|&(x, y, bw, bh)| {
+                        mx >= x && mx <= x + bw && my >= y && my <= y + bh
+                    })
+                };
+
+                if over_button {
+                    app.handle_button_click(mx, my);
+                } else {
+                    app.is_dragging = true;
+                    app.drag_last = (mx, my);
+                    app.window.set_cursor(CursorIcon::Grabbing);
+                }
                 app.window.request_redraw();
+            }
+            WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left, .. } => {
+                if app.is_dragging {
+                    app.is_dragging = false;
+                    app.window.set_cursor(CursorIcon::Default);
+                    app.window.request_redraw();
+                }
             }
             WindowEvent::RedrawRequested => {
                 let now = std::time::Instant::now();

@@ -66,12 +66,11 @@ impl Move {
 
     pub fn rotation_angle_deg(&self) -> f32 {
         match self {
-            // Inverse (Synchronous) rotations
-            Move::U | Move::R | Move::F => 90.0,
-            Move::D | Move::L | Move::B => -90.0,
+            Move::U | Move::R | Move::F => -90.0,
+            Move::D | Move::L | Move::B => 90.0,
             Move::U2 | Move::D2 | Move::F2 | Move::B2 | Move::R2 | Move::L2 => 180.0,
-            Move::UPrime | Move::RPrime | Move::FPrime => -90.0,
-            Move::DPrime | Move::LPrime | Move::BPrime => 90.0,
+            Move::UPrime | Move::RPrime | Move::FPrime => 90.0,
+            Move::DPrime | Move::LPrime | Move::BPrime => -90.0,
         }
     }
 
