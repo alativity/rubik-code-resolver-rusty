@@ -1,0 +1,13 @@
+[package]
+name = "rubik-code-resolver-rusty"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+wgpu = "27.0.1"
+winit = "0.30.12"
+pollster = "0.4.0"
+cgmath = "0.18"
+bytemuck = { version = "1.14", features = ["derive"] }
+rand = "0.9.2"
+env_logger = "0.11"
